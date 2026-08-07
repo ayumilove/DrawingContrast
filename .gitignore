@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 日志与运行产物（web/ 为运行时自动生成目录，只读页面已移入包资源）
+*.log
+web/
+focus_area.json
+
+# 用户本地 AI 配置（含 API Key，仅存于用户目录，双保险；仓库仅保留 config.sample.json 样本）
+config.json
+
+# 图纸样例（内部图纸，不入库）
+*.pdf
+
+# 测试脚本与测试输出
+test_*.py
+test_output/
+
+# 诊断/预览/截图产物
+diag_*.png
+preview_*.png
+page_*.png
+screenshot_*.png
+
+# PyInstaller 每次构建自动生成
+DrawingContrast.spec
+
+# PPT 演示产物
+ppt/
+
+# 本地归档包（含闭源旧版代码，严禁入库）
+*.zip

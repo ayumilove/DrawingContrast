@@ -1,0 +1,40 @@
+# 推送版本 tag（如 v0.3.0）时自动打包 EXE 并发布 GitHub Release
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Build EXE
+        run: uv run scripts/build_exe.py
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DrawingContrast.exe
+          generate_release_notes: true
+          body: |
+            ## 下载安装
+
+            下载本 Release 中的 `DrawingContrast.exe`，开箱即用，无需安装 Python 环境。
+
+            > 程序启动时会自动检查本仓库的最新 Release，发现新版本时会弹窗提醒更新。

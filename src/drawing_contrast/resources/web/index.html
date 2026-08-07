@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程图纸差异可视化</title>
+<style>
+  :root {
+    /* OKLCH tinted neutrals — warm slate undertone for engineering precision */
+    --surface-0: oklch(98% 0.006 250);     /* page bg */
+    --surface-1: oklch(96% 0.005 250);     /* header/controls bg */
+    --surface-2: oklch(93% 0.008 250);     /* canvas container bg */
+    --border-subtle: oklch(88% 0.008 250);
+    --border-medium: oklch(82% 0.01 250);
+
+    --text-primary: oklch(18% 0.01 250);
+    --text-secondary: oklch(42% 0.01 250);
+    --text-tertiary: oklch(58% 0.008 250);
+
+    /* Semantic: diff states only */
+    --color-added: oklch(52% 0.22 25);      /* muted red */
+    --color-added-light: oklch(92% 0.04 25);
+    --color-removed: oklch(48% 0.18 260);   /* steady blue */
+    --color-removed-light: oklch(92% 0.04 260);
+    --color-neutral: oklch(65% 0.01 250);
+
+    /* Spacing: 4pt base */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-xl: 24px;
+    --space-2xl: 32px;
+
+    /* Motion */
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+    --duration-fast: 150ms;
+    --duration-normal: 250ms;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    font-kerning: normal;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Floating header (overlay top) ── */
+  .header {
+    position: absolute;
+    top: var(--space-md);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+    padding: var(--space-xs) var(--space-lg);
+    background: oklch(99% 0 0 / 0.95);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px oklch(0% 0 0 / 0.06);
+    pointer-events: auto;
+    transition: opacity var(--duration-normal) var(--ease-out-quart);
+  }
+
+  .header-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+
+  .legend {
+    display: flex;
+    gap: var(--space-lg);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .swatch-removed { background: var(--color-removed); }
+  .swatch-unchanged { background: var(--color-neutral); }
+  .swatch-added { background: var(--color-added); }
+
+  /* ── Canvas viewport (full screen) ── */
+  .viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: var(--surface-2);
+    touch-action: none;
+  }
+
+  .viewport.grabbing { cursor: grabbing; }
+
+  #layerContainer {
+    position: absolute;
+    transform-origin: 0 0;
+  }
+
+  #layerContainer img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    image-rendering: auto;
+  }
+
+  .loading-indicator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  .loading-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border-medium);
+    border-top-color: var(--text-secondary);
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Floating controls (overlay bottom center) ── */
+  .controls {
+    position: absolute;
+    bottom: var(--space-lg);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    padding: var(--space-sm) var(--space-lg);
+    background: oklch(99% 0 0 / 0.95);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    box-shadow: 0 2px 12px oklch(0% 0 0 / 0.08);
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    pointer-events: auto;
+    max-width: 680px;
+    width: 90%;
+  }
+
+  /* Slider row */
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex: 1;
+  }
+
+  .slider-label-b,
+  .slider-label-a {
+    font-size: 0.75rem;
+    font-weight: 600;
+    min-width: 14px;
+    text-align: center;
+    user-select: none;
+  }
+
+  .slider-label-b { color: var(--color-removed); }
+  .slider-label-a { color: var(--color-added); }
+
+  /* Range input */
+  .slider-row input[type="range"] {
+    flex: 1;
+    height: 5px;
+    min-width: 200px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--border-medium);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    background: var(--surface-0);
+    border-radius: 50%;
+    border: 2px solid var(--text-secondary);
+    box-shadow: 0 1px 3px oklch(0% 0 0 / 0.12);
+    cursor: grab;
+    transition: border-color var(--duration-fast) var(--ease-out-quart),
+                box-shadow var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .slider-row input[type="range"]::-webkit-slider-thumb:hover {
+    border-color: var(--text-primary);
+    box-shadow: 0 1px 6px oklch(0% 0 0 / 0.18);
+  }
+
+  .slider-row input[type="range"]::-webkit-slider-thumb:active {
+    cursor: grabbing;
+  }
+
+  .slider-row input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: var(--surface-0);
+    border-radius: 50%;
+    border: 2px solid var(--text-secondary);
+    box-shadow: 0 1px 3px oklch(0% 0 0 / 0.12);
+    cursor: grab;
+  }
+
+  /* Phase indicator + percentage */
+  .slider-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    white-space: nowrap;
+  }
+
+  /* 快捷状态按钮组 */
+  .quick-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface-2);
+    border-radius: 5px;
+    margin-right: var(--space-sm);
+  }
+
+  .quick-btn {
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    line-height: 1.4;
+    user-select: none;
+    transition: background var(--duration-fast) var(--ease-out-quart),
+                color var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .quick-btn:hover {
+    background: oklch(100% 0 0 / 0.6);
+    color: var(--text-primary);
+  }
+
+  .quick-btn.active {
+    background: var(--surface-0);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px oklch(0% 0 0 / 0.08);
+  }
+
+  .quick-btn[data-phase="b"].active { color: var(--color-removed); }
+  .quick-btn[data-phase="a"].active { color: var(--color-added); }
+
+  .phase-badge {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 2px var(--space-sm);
+    border-radius: 3px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    min-width: 86px;
+    text-align: center;
+    transition: background var(--duration-normal) var(--ease-out-quart),
+                color var(--duration-normal) var(--ease-out-quart);
+  }
+
+  .phase-badge[data-phase="b"] {
+    background: var(--color-removed-light);
+    color: var(--color-removed);
+  }
+
+  .phase-badge[data-phase="diff"] {
+    background: oklch(92% 0.005 250);
+    color: var(--text-secondary);
+  }
+
+  .phase-badge[data-phase="a"] {
+    background: var(--color-added-light);
+    color: var(--color-added);
+  }
+
+  .slider-pct {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 36px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Copyright notice (overlay bottom-left) ── */
+  .copyright {
+    position: absolute;
+    bottom: var(--space-lg);
+    left: var(--space-lg);
+    z-index: 10;
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    letter-spacing: 0.02em;
+    pointer-events: auto;
+    user-select: none;
+    opacity: 0.7;
+    transition: opacity var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .copyright:hover {
+    opacity: 1;
+  }
+
+  .copyright a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .copyright a:hover {
+    text-decoration: underline;
+  }
+
+  /* ── Floating zoom toolbar (overlay bottom-right) ── */
+  .toolbar {
+    position: absolute;
+    bottom: var(--space-lg);
+    right: var(--space-lg);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    background: oklch(99% 0 0 / 0.95);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px oklch(0% 0 0 / 0.06);
+    pointer-events: auto;
+  }
+
+  .toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    line-height: 1;
+    transition: background var(--duration-fast) var(--ease-out-quart),
+                color var(--duration-fast) var(--ease-out-quart);
+    user-select: none;
+  }
+
+  .toolbar-btn:hover {
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
+
+  .toolbar-btn:active {
+    background: var(--border-subtle);
+  }
+
+  .zoom-display {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    min-width: 32px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Warning banner for different drawings ── */
+  .diff-warning {
+    position: absolute;
+    top: var(--space-md);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: none;  /* hidden by default, shown via JS */
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-xl);
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border: 1.5px solid #f59e0b;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px oklch(0% 0 0 / 0.12), 0 0 0 1px oklch(85% 0.08 80);
+    pointer-events: auto;
+    animation: warningPulse 3s ease-in-out infinite;
+  }
+
+  @keyframes warningPulse {
+    0%, 100% { box-shadow: 0 4px 16px oklch(0% 0 0 / 0.12), 0 0 0 1px oklch(85% 0.08 80); }
+    50%       { box-shadow: 0 4px 24px oklch(0% 0 0 / 0.18), 0 0 0 2px oklch(75% 0.14 80); }
+  }
+
+  .diff-warning.visible {
+    display: flex;
+  }
+
+  .diff-warning-icon {
+    font-size: 1.25rem;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .diff-warning-text {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #92400e;
+    line-height: 1.4;
+  }
+
+  .diff-warning-sub {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: #b45309;
+    display: block;
+    margin-top: 1px;
+  }
+
+  .diff-warning-close {
+    background: transparent;
+    border: none;
+    color: #b45309;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    line-height: 1;
+    opacity: 0.6;
+    transition: opacity var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .diff-warning-close:hover {
+    opacity: 1;
+    background: oklch(0% 0 0 / 0.05);
+  }
+
+  /* When warning is visible, move header lower */
+  .diff-warning.visible ~ .header {
+    top: 56px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* ── 变更清单侧栏 ── */
+  .change-panel {
+    position: absolute;
+    top: 64px;
+    left: var(--space-lg);
+    bottom: 72px;
+    z-index: 15;
+    width: 300px;
+    display: none;  /* meta 无 regions 时不渲染 */
+    flex-direction: column;
+    background: oklch(99% 0 0 / 0.96);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    box-shadow: 0 2px 12px oklch(0% 0 0 / 0.08);
+    pointer-events: auto;
+    overflow: hidden;
+    transition: transform var(--duration-normal) var(--ease-out-quart);
+  }
+
+  .change-panel.available { display: flex; }
+
+  .change-panel.collapsed {
+    transform: translateX(calc(-100% - var(--space-lg) + 34px));
+  }
+
+  .change-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .change-panel-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .change-panel-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+  }
+
+  .change-panel-toggle:hover { background: var(--surface-2); }
+
+  .change-summary {
+    padding: var(--space-sm) var(--space-md);
+    font-size: 0.75rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    background: oklch(96% 0.01 250);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    max-height: 110px;
+    overflow-y: auto;
+  }
+
+  .change-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-xs);
+  }
+
+  .change-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-sm);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out-quart);
+  }
+
+  .change-item:hover { background: var(--surface-2); }
+  .change-item.active { background: oklch(93% 0.03 250); }
+
+  .change-item.filtered { opacity: 0.5; }
+
+  .change-badge {
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    margin-top: 1px;
+  }
+
+  .badge-dim    { background: oklch(92% 0.04 25);  color: oklch(45% 0.2 25); }   /* 尺寸变更 */
+  .badge-geo    { background: oklch(92% 0.05 145); color: oklch(40% 0.12 145); } /* 几何变更 */
+  .badge-anno   { background: oklch(92% 0.04 260); color: oklch(42% 0.15 260); } /* 标注变更 */
+  .badge-moved  { background: oklch(93% 0.07 90);  color: oklch(50% 0.12 80); }  /* 视图移动 */
+  .badge-noise  { background: oklch(93% 0.005 250); color: var(--text-tertiary); } /* 噪声 */
+  .badge-other  { background: var(--surface-2); color: var(--text-secondary); }  /* 未知 */
+  .badge-pending { background: var(--surface-2); color: var(--text-tertiary); animation: pendingBlink 1.2s ease-in-out infinite; } /* 解读中 */
+
+  @keyframes pendingBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  .change-desc {
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .change-desc-sub {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    margin-top: 1px;
+  }
+
+  .change-group-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    padding: var(--space-sm) var(--space-sm) 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── 图上标注覆盖层 ── */
+  #annotOverlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  .annot-box {
+    position: absolute;
+    border: var(--annot-bw, 2px) solid oklch(52% 0.22 25 / 0.75);
+    border-radius: 2px;
+    box-sizing: border-box;
+    pointer-events: auto;  /* 可点击，反向定位清单条目 */
+    cursor: pointer;
+  }
+
+  .annot-box.moved {
+    border: var(--annot-bw, 2px) dashed oklch(70% 0.14 85);
+  }
+
+  .annot-box.filtered { border-color: oklch(70% 0.01 250 / 0.5); border-style: dotted; }
+
+  .annot-box.highlight {
+    animation: annotPulse 2s var(--ease-out-quart);
+  }
+
+  @keyframes annotPulse {
+    0%   { box-shadow: 0 0 0 0 oklch(52% 0.22 25 / 0.55); }
+    50%  { box-shadow: 0 0 0 14px oklch(52% 0.22 25 / 0.15); }
+    100% { box-shadow: 0 0 0 0 oklch(52% 0.22 25 / 0); }
+  }
+</style>
+</head>
+<body>
+
+<div class="viewport">
+  <!-- Different drawings warning banner -->
+  <div class="diff-warning" id="diffWarning">
+    <span class="diff-warning-icon">⚠️</span>
+    <span class="diff-warning-text">
+      检测到不同零件图纸
+      <span class="diff-warning-sub">两张图纸非版本变更关系，差异对比仅供参考</span>
+    </span>
+    <button class="diff-warning-close" onclick="this.parentElement.classList.remove('visible')" title="关闭提示">×</button>
+  </div>
+
+  <!-- Floating header -->
+  <header class="header">
+    <span class="header-title" id="title">工程图纸差异可视化</span>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch swatch-removed"></div><span>删除</span></div>
+      <div class="legend-item"><div class="legend-swatch swatch-unchanged"></div><span>未变更</span></div>
+      <div class="legend-item"><div class="legend-swatch swatch-added"></div><span>新增</span></div>
+    </div>
+  </header>
+
+  <div class="loading-indicator" id="loadingText">
+    <div class="loading-spinner"></div>
+    <span>加载图层中...</span>
+  </div>
+  <div id="layerContainer">
+    <div id="layerBg" style="position:absolute;top:0;left:0;width:100%;height:100%;background:#fefefe;"></div>
+    <img id="layerB" src="" alt="">
+    <img id="layerA" src="" alt="">
+    <img id="layerRemoved" src="" alt="">
+    <img id="layerAdded" src="" alt="">
+    <div id="annotOverlay"></div>
+  </div>
+
+  <!-- 变更清单侧栏（meta 含 regions 时才显示） -->
+  <aside class="change-panel" id="changePanel">
+    <div class="change-panel-header">
+      <span class="change-panel-title" id="changePanelTitle">变更清单</span>
+      <button class="change-panel-toggle" id="changePanelToggle" title="收起/展开">◀</button>
+    </div>
+    <div class="change-summary" id="changeSummary" style="display:none;"></div>
+    <div class="change-list" id="changeList"></div>
+  </aside>
+
+  <!-- Floating slider -->
+  <div class="controls">
+    <!-- 快捷状态按钮：一键跳到旧图 / 差异对比 / 新图 -->
+    <div class="quick-btns">
+      <button class="quick-btn active" data-phase="b" data-value="0" onclick="jumpTo(0)">旧图</button>
+      <button class="quick-btn" data-phase="diff" data-value="50" onclick="jumpTo(50)">差异</button>
+      <button class="quick-btn" data-phase="a" data-value="100" onclick="jumpTo(100)">新图</button>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label-b">旧</span>
+      <input type="range" id="slider" min="0" max="100" value="0" step="1">
+      <span class="slider-label-a">新</span>
+    </div>
+    <div class="slider-meta">
+      <span class="phase-badge" id="phaseBadge" data-phase="b">旧图</span>
+      <span class="slider-pct" id="sliderValue">0%</span>
+    </div>
+  </div>
+
+  <!-- Copyright -->
+  <div class="copyright">
+    © 2026 <a href="https://xcode.im" target="_blank">xcode.im</a> · Xing
+  </div>
+
+  <!-- Floating zoom toolbar -->
+  <div class="toolbar">
+    <button class="toolbar-btn" onclick="zoomOut()" title="缩小 (−)">−</button>
+    <span class="zoom-display" id="zoomLevel">100%</span>
+    <button class="toolbar-btn" onclick="zoomIn()" title="放大 (+)">+</button>
+    <button class="toolbar-btn" onclick="zoomReset()" title="适应窗口 (0)">⊡</button>
+  </div>
+</div>
+
+<script>
+const layerContainer = document.getElementById('layerContainer');
+const layerB = document.getElementById('layerB');
+const layerA = document.getElementById('layerA');
+const layerRemoved = document.getElementById('layerRemoved');
+const layerAdded = document.getElementById('layerAdded');
+const slider = document.getElementById('slider');
+const sliderValue = document.getElementById('sliderValue');
+const loadingText = document.getElementById('loadingText');
+const phaseBadge = document.getElementById('phaseBadge');
+
+let imgWidth = 0, imgHeight = 0;
+let meta = null;
+let loaded = 0;
+const totalAssets = 5;
+
+let viewState = { zoom: 1, panX: 0, panY: 0 };
+const ZOOM_MIN = 0.1, ZOOM_MAX = 10;
+
+function onAssetLoaded() {
+  loaded++;
+  const span = loadingText.querySelector('span');
+  if (span) span.textContent = `加载图层中... (${loaded}/${totalAssets})`;
+  if (loaded >= totalAssets) {
+    loadingText.style.display = 'none';
+    initLayers();
+    render(0);
+  }
+}
+
+function loadLayerImage(el, src) {
+  return new Promise((resolve) => {
+    el.onload = () => { onAssetLoaded(); resolve(true); };
+    el.onerror = () => { console.error('Failed to load:', src); el.style.display='none'; onAssetLoaded(); resolve(false); };
+    el.src = src;
+  });
+}
+
+/**
+ * 尝试加载图片，优先使用 primarySrc，失败时回退到 fallbackSrc
+ */
+function tryLoadImage(el, primarySrc, fallbackSrc) {
+  return new Promise((resolve) => {
+    let loaded = false;
+    
+    el.onload = () => {
+      if (!loaded) {
+        loaded = true;
+        onAssetLoaded();
+        resolve(true);
+      }
+    };
+    
+    el.onerror = () => {
+      if (!loaded) {
+        // 主格式加载失败，尝试备选格式
+        console.warn(`主格式加载失败 ${primarySrc}，尝试备选格式 ${fallbackSrc}`);
+        el.onerror = () => {
+          console.error('备选格式也加载失败:', fallbackSrc);
+          el.style.display = 'none';
+          onAssetLoaded();
+          resolve(false);
+        };
+        el.src = fallbackSrc;
+      }
+    };
+    
+    el.src = primarySrc;
+  });
+}
+
+async function loadAll() {
+  // 优先加载 PNG 格式（兼容性更好），失败时回退到 WebP
+  await Promise.all([
+    tryLoadImage(layerA, '/static/img_a.png', '/static/img_a.webp'),
+    tryLoadImage(layerB, '/static/img_b.png', '/static/img_b.webp'),
+    tryLoadImage(layerAdded, '/static/diff_added.png', '/static/diff_added.webp'),
+    tryLoadImage(layerRemoved, '/static/diff_removed.png', '/static/diff_removed.webp'),
+  ]);
+
+  try {
+    const resp = await fetch('/static/meta.json');
+    meta = await resp.json();
+    document.getElementById('title').textContent =
+      `${meta.pdf_b} → ${meta.pdf_a}`;
+    // 显示不同图纸警告
+    if (meta.different_drawings) {
+      document.getElementById('diffWarning').classList.add('visible');
+    }
+    // 变更清单（无 regions 字段时保持原行为）
+    initChangePanel(meta);
+    // VLM 后台解读未完成时轮询刷新
+    startVlmPolling(meta);
+  } catch(e) { console.warn('meta.json load failed'); }
+  onAssetLoaded();
+}
+
+function initLayers() {
+  imgWidth = layerA.naturalWidth || layerB.naturalWidth || 1;
+  imgHeight = layerA.naturalHeight || layerB.naturalHeight || 1;
+  layerContainer.style.width = imgWidth + 'px';
+  layerContainer.style.height = imgHeight + 'px';
+  zoomReset();
+}
+
+function applyTransform() {
+  layerContainer.style.transform = `translate(${viewState.panX}px, ${viewState.panY}px) scale(${viewState.zoom})`;
+  // 标注框线宽随缩放反向补偿，保证视觉上始终约2px
+  const overlay = document.getElementById('annotOverlay');
+  if (overlay) overlay.style.setProperty('--annot-bw', Math.max(1, 2 / viewState.zoom) + 'px');
+}
+
+function zoomTo(newZoom, pivotX, pivotY) {
+  const oldZoom = viewState.zoom;
+  newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newZoom));
+  const ratio = newZoom / oldZoom;
+  viewState.panX = pivotX - (pivotX - viewState.panX) * ratio;
+  viewState.panY = pivotY - (pivotY - viewState.panY) * ratio;
+  viewState.zoom = newZoom;
+  applyTransform();
+  updateZoomDisplay();
+}
+
+function updateZoomDisplay() {
+  document.getElementById('zoomLevel').textContent = Math.round(viewState.zoom * 100) + '%';
+}
+
+/**
+ * Smoothstep: Hermite 插值
+ */
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Core render - GPU加速版本
+ * 仅修改各图层的 CSS opacity，由浏览器 GPU 合成器处理
+ * 无 Canvas drawImage，完全无闪烁
+ */
+let rafId = 0;
+function render(t) {
+  const x = t / 100;
+
+  // 图纸B: S曲线从 1 下降到 0
+  const alphaB = 1 - smoothstep(0.08, 0.92, x);
+  // 图纸A: S曲线从 0 上升到 1
+  const alphaA = smoothstep(0.08, 0.92, x);
+  // 差异图层: 钟形曲线，中间最强
+  const diffIntensity = Math.sin(x * Math.PI);
+
+  layerB.style.opacity = alphaB;
+  layerA.style.opacity = alphaA;
+  layerRemoved.style.opacity = alphaB * diffIntensity * 0.85;
+  layerAdded.style.opacity = alphaA * diffIntensity * 0.85;
+}
+
+// Phase badge update - 基于平滑曲线的渐进指示
+function updatePhase(val) {
+  if (val <= 5) {
+    phaseBadge.textContent = '旧图';
+    phaseBadge.dataset.phase = 'b';
+  } else if (val >= 95) {
+    phaseBadge.textContent = '新图';
+    phaseBadge.dataset.phase = 'a';
+  } else if (val <= 20) {
+    phaseBadge.textContent = '旧图 → 对比';
+    phaseBadge.dataset.phase = 'b';
+  } else if (val >= 80) {
+    phaseBadge.textContent = '对比 → 新图';
+    phaseBadge.dataset.phase = 'a';
+  } else {
+    phaseBadge.textContent = '差异对比';
+    phaseBadge.dataset.phase = 'diff';
+  }
+}
+
+slider.addEventListener('input', (e) => {
+  const val = parseInt(e.target.value);
+  sliderValue.textContent = val + '%';
+  updatePhase(val);
+  updateQuickBtns(val);
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(() => render(val));
+});
+
+// === 快捷状态按钮：一键跳到指定状态 ===
+function jumpTo(val) {
+  slider.value = val;
+  sliderValue.textContent = val + '%';
+  updatePhase(val);
+  updateQuickBtns(val);
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(() => render(val));
+}
+
+// 同步快捷按钮高亮状态
+function updateQuickBtns(val) {
+  const btns = document.querySelectorAll('.quick-btn');
+  // 选中距离当前值最近的按钮（<5 贴近旧图，>95 贴近新图，40~60 是差异）
+  let activeValue = -1;
+  if (val <= 5) activeValue = 0;
+  else if (val >= 95) activeValue = 100;
+  else if (val >= 40 && val <= 60) activeValue = 50;
+  btns.forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.value) === activeValue);
+  });
+}
+
+// === Zoom buttons ===
+function zoomIn() {
+  const c = document.querySelector('.viewport');
+  zoomTo(viewState.zoom * 1.3, c.clientWidth / 2, c.clientHeight / 2);
+}
+function zoomOut() {
+  const c = document.querySelector('.viewport');
+  zoomTo(viewState.zoom / 1.3, c.clientWidth / 2, c.clientHeight / 2);
+}
+function zoomReset() {
+  if (!imgWidth) return;
+  const c = document.querySelector('.viewport');
+  const scaleW = c.clientWidth / imgWidth;
+  const scaleH = c.clientHeight / imgHeight;
+  viewState.zoom = Math.min(scaleW, scaleH) * 0.95;
+  viewState.panX = (c.clientWidth - imgWidth * viewState.zoom) / 2;
+  viewState.panY = (c.clientHeight - imgHeight * viewState.zoom) / 2;
+  applyTransform();
+  updateZoomDisplay();
+}
+
+// === Wheel zoom (rAF 节流) ===
+const container = document.querySelector('.viewport');
+let wheelRafId = 0;
+let pendingWheelZoom = null;
+container.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = container.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  pendingWheelZoom = { factor, mouseX, mouseY };
+  if (!wheelRafId) {
+    wheelRafId = requestAnimationFrame(() => {
+      if (pendingWheelZoom) {
+        zoomTo(viewState.zoom * pendingWheelZoom.factor, pendingWheelZoom.mouseX, pendingWheelZoom.mouseY);
+        pendingWheelZoom = null;
+      }
+      wheelRafId = 0;
+    });
+  }
+}, { passive: false });
+
+// === Mouse drag (rAF 节流) ===
+let isDragging = false, dragStartX = 0, dragStartY = 0;
+let dragRafId = 0;
+let pendingPan = null;
+container.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  // 忽略来自悬浮控件的事件（slider、按钮、侧栏等）；标注框点击用于反向定位清单
+  if (e.target.closest('.controls') || e.target.closest('.toolbar') || e.target.closest('.header') || e.target.closest('.change-panel') || e.target.closest('.annot-box')) return;
+  isDragging = true;
+  dragStartX = e.clientX - viewState.panX;
+  dragStartY = e.clientY - viewState.panY;
+  container.classList.add('grabbing');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  pendingPan = { x: e.clientX - dragStartX, y: e.clientY - dragStartY };
+  if (!dragRafId) {
+    dragRafId = requestAnimationFrame(() => {
+      if (pendingPan) {
+        viewState.panX = pendingPan.x;
+        viewState.panY = pendingPan.y;
+        applyTransform();
+        pendingPan = null;
+      }
+      dragRafId = 0;
+    });
+  }
+});
+window.addEventListener('mouseup', () => {
+  isDragging = false;
+  container.classList.remove('grabbing');
+  if (dragRafId) {
+    cancelAnimationFrame(dragRafId);
+    dragRafId = 0;
+    if (pendingPan) {
+      viewState.panX = pendingPan.x;
+      viewState.panY = pendingPan.y;
+      applyTransform();
+      pendingPan = null;
+    }
+  }
+});
+
+// === Touch: pinch zoom + single-finger pan ===
+let lastTouchDist = 0, lastTouchCenter = null;
+let lastSingleTouch = null;
+
+container.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) {
+    e.preventDefault();
+    const t = e.touches;
+    lastTouchDist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+    const rect = container.getBoundingClientRect();
+    lastTouchCenter = {
+      x: (t[0].clientX + t[1].clientX) / 2 - rect.left,
+      y: (t[0].clientY + t[1].clientY) / 2 - rect.top
+    };
+  } else if (e.touches.length === 1) {
+    lastSingleTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+}, { passive: false });
+
+container.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2) {
+    e.preventDefault();
+    const t = e.touches;
+    const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+    if (lastTouchDist > 0) {
+      const factor = dist / lastTouchDist;
+      zoomTo(viewState.zoom * factor, lastTouchCenter.x, lastTouchCenter.y);
+    }
+    lastTouchDist = dist;
+    const rect = container.getBoundingClientRect();
+    lastTouchCenter = {
+      x: (t[0].clientX + t[1].clientX) / 2 - rect.left,
+      y: (t[0].clientY + t[1].clientY) / 2 - rect.top
+    };
+  } else if (e.touches.length === 1 && lastSingleTouch) {
+    e.preventDefault();
+    const dx = e.touches[0].clientX - lastSingleTouch.x;
+    const dy = e.touches[0].clientY - lastSingleTouch.y;
+    viewState.panX += dx;
+    viewState.panY += dy;
+    applyTransform();
+    lastSingleTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+}, { passive: false });
+
+container.addEventListener('touchend', () => {
+  lastTouchDist = 0;
+  lastTouchCenter = null;
+  lastSingleTouch = null;
+});
+
+// === Keyboard shortcuts ===
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'd') {
+    slider.value = Math.min(100, parseInt(slider.value) + 2);
+  } else if (e.key === 'ArrowLeft' || e.key === 'a') {
+    slider.value = Math.max(0, parseInt(slider.value) - 2);
+  } else if (e.key === '+' || e.key === '=') {
+    zoomIn(); return;
+  } else if (e.key === '-') {
+    zoomOut(); return;
+  } else if (e.key === '0') {
+    zoomReset(); return;
+  } else {
+    return;
+  }
+  const val = parseInt(slider.value);
+  sliderValue.textContent = val + '%';
+  updatePhase(val);
+  render(val);
+});
+
+window.addEventListener('resize', () => { if (imgWidth) zoomReset(); });
+
+// === 变更清单侧栏 + 标注覆盖层 ===
+const BADGE_CLASS = {
+  '尺寸变更': 'badge-dim',
+  '几何变更': 'badge-geo',
+  '标注变更': 'badge-anno',
+  '视图移动': 'badge-moved',
+  '噪声': 'badge-noise',
+  '解读中': 'badge-pending',
+};
+
+function initChangePanel(meta) {
+  const regions = meta.regions || [];
+  const movedViews = meta.moved_views || [];
+  if (!regions.length && !movedViews.length) return;  // 向后兼容：无数据不渲染
+
+  const panel = document.getElementById('changePanel');
+  const list = document.getElementById('changeList');
+  const overlay = document.getElementById('annotOverlay');
+  panel.classList.add('available');
+  // 支持 VLM 后台解读期间重复渲染：每次重建清单与标注
+  list.innerHTML = '';
+  overlay.innerHTML = '';
+  const analyzing = meta.vlm_status === 'running';
+
+  // 摘要（解读进行中时显示占位）
+  const summaryEl = document.getElementById('changeSummary');
+  if (meta.summary) {
+    summaryEl.textContent = meta.summary;
+    summaryEl.style.display = 'block';
+  } else if (analyzing) {
+    summaryEl.textContent = '⏳ AI 正在解读差异区域，清单将逐条刷新…';
+    summaryEl.style.display = 'block';
+  } else {
+    summaryEl.style.display = 'none';
+  }
+
+  const realRegions = regions.filter(r => r.is_real_change !== false);
+  const noiseRegions = regions.filter(r => r.is_real_change === false);
+  document.getElementById('changePanelTitle').textContent =
+    `变更清单 (${realRegions.length + movedViews.length})`;
+
+  let itemIdx = 0;
+
+  function addItem(bbox, type, desc, sub, filtered) {
+    const idx = itemIdx++;
+    // 图上标注框
+    const box = document.createElement('div');
+    box.className = 'annot-box' + (type === '视图移动' ? ' moved' : '') + (filtered ? ' filtered' : '');
+    box.id = 'annot-' + idx;
+    box.style.left = bbox[0] + 'px';
+    box.style.top = bbox[1] + 'px';
+    box.style.width = bbox[2] + 'px';
+    box.style.height = bbox[3] + 'px';
+    overlay.appendChild(box);
+    // 清单条目
+    const item = document.createElement('div');
+    item.className = 'change-item' + (filtered ? ' filtered' : '');
+    item.id = 'change-item-' + idx;
+    const badge = document.createElement('span');
+    badge.className = 'change-badge ' + (BADGE_CLASS[type] || 'badge-other');
+    badge.textContent = type || '未知';
+    const descWrap = document.createElement('div');
+    const descEl = document.createElement('div');
+    descEl.className = 'change-desc';
+    descEl.textContent = desc;
+    descWrap.appendChild(descEl);
+    if (sub) {
+      const subEl = document.createElement('div');
+      subEl.className = 'change-desc-sub';
+      subEl.textContent = sub;
+      descWrap.appendChild(subEl);
+    }
+    item.appendChild(badge);
+    item.appendChild(descWrap);
+    item.addEventListener('click', () => {
+      setActiveItem(idx);
+      focusRegion(bbox, idx);
+    });
+    // 反向联动：点击图上标注框 → 清单定位到对应条目
+    box.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setActiveItem(idx);
+      revealListItem(idx);
+    });
+    list.appendChild(item);
+  }
+
+  realRegions.forEach((r, i) => {
+    if (analyzing && !('change_type' in r)) {
+      // VLM 尚未返回该区域的解读结果
+      addItem(r.bbox, '解读中', `差异区域 ${r.id || i + 1}`, 'AI 解读中…', false);
+      return;
+    }
+    const desc = r.description || `差异区域 ${r.id || i + 1}`;
+    const sub = `新增 ${r.added_pixels || 0} px · 删除 ${r.removed_pixels || 0} px`;
+    addItem(r.bbox, r.change_type || '未知', desc, sub, false);
+  });
+
+  movedViews.forEach((mv) => {
+    const desc = `视图整体移动 (dx=${mv.dx}, dy=${mv.dy})`;
+    addItem(mv.bbox_a, '视图移动', desc, '内容未变，仅位置变化', false);
+  });
+
+  if (noiseRegions.length) {
+    const groupTitle = document.createElement('div');
+    groupTitle.className = 'change-group-title';
+    groupTitle.textContent = `已过滤噪声 (${noiseRegions.length})`;
+    list.appendChild(groupTitle);
+    noiseRegions.forEach((r, i) => {
+      const desc = r.description || `疑似渲染噪声 ${i + 1}`;
+      addItem(r.bbox, r.change_type || '噪声', desc, null, true);
+    });
+  }
+
+  // 收起/展开（只绑一次，避免重复渲染时叠加监听）
+  const toggle = document.getElementById('changePanelToggle');
+  if (!panel.dataset.toggleBound) {
+    panel.dataset.toggleBound = '1';
+    toggle.addEventListener('click', () => {
+      const collapsed = panel.classList.toggle('collapsed');
+      toggle.textContent = collapsed ? '▶' : '◀';
+    });
+  }
+}
+
+// VLM 后台解读期间轮询 meta.json，逐条刷新清单
+let vlmPollTimer = null;
+function startVlmPolling(m) {
+  if (m.vlm_status !== 'running' || vlmPollTimer) return;
+  let lastVersion = m.analysis_version || 0;
+  vlmPollTimer = setInterval(async () => {
+    try {
+      const resp = await fetch('/static/meta.json?_=' + Date.now(), { cache: 'no-store' });
+      const fresh = await resp.json();
+      if ((fresh.analysis_version || 0) !== lastVersion || fresh.vlm_status !== 'running') {
+        lastVersion = fresh.analysis_version || 0;
+        meta = fresh;
+        initChangePanel(fresh);
+      }
+      if (fresh.vlm_status !== 'running') {
+        clearInterval(vlmPollTimer);
+        vlmPollTimer = null;
+      }
+    } catch (e) { /* 单次读取失败忽略，下个周期重试 */ }
+  }, 2000);
+}
+
+// 高亮清单条目（清除其余高亮）
+function setActiveItem(idx) {
+  document.querySelectorAll('.change-item').forEach(el => el.classList.remove('active'));
+  const item = document.getElementById('change-item-' + idx);
+  if (item) item.classList.add('active');
+}
+
+// 点击图上标注框 → 展开侧栏并滚动定位到对应清单条目
+function revealListItem(idx) {
+  const panel = document.getElementById('changePanel');
+  const toggle = document.getElementById('changePanelToggle');
+  if (panel.classList.contains('collapsed')) {
+    panel.classList.remove('collapsed');
+    if (toggle) toggle.textContent = '◀';
+  }
+  const item = document.getElementById('change-item-' + idx);
+  if (item) item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// 点击条目 → 平移缩放使 bbox 居中并高亮
+function focusRegion(bbox, idx) {
+  const c = document.querySelector('.viewport');
+  const [x, y, w, h] = bbox;
+  // 目标缩放：bbox 占视口约 50%（限制在合理范围）
+  let targetZoom = Math.min(c.clientWidth * 0.5 / Math.max(1, w),
+                            c.clientHeight * 0.5 / Math.max(1, h));
+  targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.min(targetZoom, 3)));
+  const cx = x + w / 2, cy = y + h / 2;
+  viewState.zoom = targetZoom;
+  viewState.panX = c.clientWidth / 2 - cx * targetZoom;
+  viewState.panY = c.clientHeight / 2 - cy * targetZoom;
+  applyTransform();
+  updateZoomDisplay();
+  // 高亮脉冲
+  const box = document.getElementById('annot-' + idx);
+  if (box) {
+    box.classList.remove('highlight');
+    void box.offsetWidth;  // 重启动画
+    box.classList.add('highlight');
+  }
+}
+
+loadAll();
+</script>
+</body>
+</html>
