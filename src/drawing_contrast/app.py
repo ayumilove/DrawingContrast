@@ -594,9 +594,10 @@ class MainWindow(QMainWindow):
         self.AI_BASE_URL = cfg.get("base_url", ai_config.DEFAULT_BASE_URL)
         self.AI_MODEL = cfg.get("model", ai_config.DEFAULT_MODEL)
         self.AI_ENABLED = bool(cfg.get("enable_ai", True)) and bool(self.API_KEY)
-        # 日志上报（可选）：仅当配置了上报地址时启用
+        # 日志上报（可选）：仅当配置了上报地址时启用；格式与初版一致（service_name/system 供 Loki 标签使用）
         if ai_config.log_enabled(cfg):
-            logbot = LogBotSdk(url=cfg["log_url"], app_version=APP_VERSION)
+            logbot = LogBotSdk(url=cfg["log_url"], service_name="drawing-contrast",
+                               system="xAuto", app_version=APP_VERSION)
         else:
             logbot = None
 
