@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QProgressBar,
     QLineEdit, QMessageBox, QStatusBar, QSplashScreen,
-    QDialog, QFormLayout, QInputDialog, QGroupBox
+    QDialog, QFormLayout, QInputDialog, QGroupBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer
 from PyQt6.QtGui import (
@@ -129,7 +129,8 @@ class ComparisonWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
 
-    def __init__(self, pdf_a, pdf_b, output_dir, api_key, use_ai, model, base_url):
+    def __init__(self, pdf_a, pdf_b, output_dir, api_key, use_ai, model, base_url,
+                 enhance_lines=True, annotate_changes=True):
         super().__init__()
         self.pdf_a = pdf_a
         self.pdf_b = pdf_b
@@ -138,6 +139,8 @@ class ComparisonWorker(QThread):
         self.use_ai = use_ai
         self.model = model
         self.base_url = base_url
+        self.enhance_lines = enhance_lines
+        self.annotate_changes = annotate_changes
 
     def run(self):
         try:
@@ -147,7 +150,9 @@ class ComparisonWorker(QThread):
                 use_ai=self.use_ai,
                 model=self.model,
                 progress_callback=self._on_progress,
-                base_url=self.base_url
+                base_url=self.base_url,
+                enhance_lines=self.enhance_lines,
+                annotate_changes=self.annotate_changes
             )
             self.finished.emit(meta)
         except Exception as e:
@@ -198,6 +203,18 @@ class SettingsDialog(QDialog):
         form_ai.addRow("Base URL", self.edit_base_url)
         form_ai.addRow("模型名称", self.edit_model)
         layout.addWidget(grp_ai)
+
+        # ── 对比选项 ──
+        grp_view = QGroupBox("对比选项")
+        form_view = QFormLayout(grp_view)
+        form_view.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.chk_enhance = QCheckBox("PDF 转图片时加粗/加深细线条（推荐开启）")
+        self.chk_enhance.setChecked(bool(cfg.get("enhance_lines", True)))
+        self.chk_annotate = QCheckBox("框选差异区域并生成变更清单与文字描述（关闭后仅显示红/蓝差异）")
+        self.chk_annotate.setChecked(bool(cfg.get("annotate_changes", True)))
+        form_view.addRow("线条增强", self.chk_enhance)
+        form_view.addRow("差异标注", self.chk_annotate)
+        layout.addWidget(grp_view)
 
         # ── FTP 设置 ──
         grp_ftp = QGroupBox("FTP 设置（可选，配置后启用零部件编号下载对比）")
@@ -288,6 +305,8 @@ class SettingsDialog(QDialog):
             "base_url": self.edit_base_url.text().strip() or ai_config.DEFAULT_BASE_URL,
             "model": self.edit_model.text().strip() or ai_config.DEFAULT_MODEL,
             "enable_ai": True,
+            "enhance_lines": self.chk_enhance.isChecked(),
+            "annotate_changes": self.chk_annotate.isChecked(),
             "ftp_host": self.edit_ftp_host.text().strip(),
             "ftp_port": ftp_port,
             "ftp_user": self.edit_ftp_user.text().strip(),
@@ -594,6 +613,9 @@ class MainWindow(QMainWindow):
         self.AI_BASE_URL = cfg.get("base_url", ai_config.DEFAULT_BASE_URL)
         self.AI_MODEL = cfg.get("model", ai_config.DEFAULT_MODEL)
         self.AI_ENABLED = bool(cfg.get("enable_ai", True)) and bool(self.API_KEY)
+        # 对比选项：线条增强与差异标注（默认开启，兼容旧配置）
+        self.ENHANCE_LINES = bool(cfg.get("enhance_lines", True))
+        self.ANNOTATE_CHANGES = bool(cfg.get("annotate_changes", True))
         # 日志上报（可选）：仅当配置了上报地址时启用；格式与初版一致（service_name/system 供 Loki 标签使用）
         if ai_config.log_enabled(cfg):
             logbot = LogBotSdk(url=cfg["log_url"], service_name="drawing-contrast",
@@ -878,7 +900,9 @@ class MainWindow(QMainWindow):
         self.worker = ComparisonWorker(
             pdf_a, pdf_b, str(self.static_dir),
             self.API_KEY, self.AI_ENABLED, self.AI_MODEL,
-            base_url=self.AI_BASE_URL
+            base_url=self.AI_BASE_URL,
+            enhance_lines=self.ENHANCE_LINES,
+            annotate_changes=self.ANNOTATE_CHANGES
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)

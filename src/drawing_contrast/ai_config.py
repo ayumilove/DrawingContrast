@@ -47,6 +47,9 @@ def _default_config() -> dict:
         "base_url": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "enable_ai": True,
+        # 对比选项：线条增强（PDF转图片时加粗/加深细线条）与差异标注（框选+清单+VLM解读）
+        "enhance_lines": True,
+        "annotate_changes": True,
         # FTP 零部件编号下载（可选）：host 为空则功能不启用
         "ftp_host": "",
         "ftp_port": 21,

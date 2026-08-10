@@ -25,9 +25,11 @@ from drawing_contrast.core.vlm_analyzer import extract_diff_regions, analyze_reg
 from drawing_contrast.ai_config import DEFAULT_BASE_URL, DEFAULT_MODEL, chat_completions_url
 
 
-def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True):
+def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True, min_line_px=2):
     """将PDF页面转为OpenCV BGR图像
-    thicken_lines: 是否加粗线条（模拟Chrome渲染效果）
+    thicken_lines: 线条增强——加深淡线条并保证最小线宽，
+                   解决 PDF 转图片时细线条被抗锯齿渲染得过细/过淡、不易看的问题
+    min_line_px: 增强后的最小线宽（像素，当前 zoom 下）
     """
     doc = fitz.open(pdf_path)
     page = doc.load_page(page_num)
@@ -43,21 +45,26 @@ def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True):
     doc.close()
 
     if thicken_lines:
-        # 轻微加粗线条：对非白色像素（线条）做 1次 dilate
-        # 使用椭圆核(2x2)，效果约等于线条加粗0.5px，接近Chrome渲染效果
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # 提取线条区域（深色像素）
-        line_mask = (gray < 200).astype(np.uint8) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        # 线条掩码：阈值放宽到 230，把极细线条的淡灰抗锯齿像素（200~230）也纳入，
+        # 否则这些像素不会被加粗，细线看起来若隐若现
+        line_mask = (gray < 230).astype(np.uint8) * 255
+
+        # 1) 加深淡灰线条：细线经抗锯齿后呈浅灰（100~230），直接看不清，按比例加深
+        faint = (gray < 230) & (gray > 100)
+        if np.any(faint):
+            img[faint] = (img[faint].astype(np.int16) * 45 // 100).clip(0, 255).astype(np.uint8)
+
+        # 2) 保证最小线宽：膨胀线条掩码得到目标宽度，新增像素用"暗色扩散"填充
+        # 注意：白底深色线条，必须用最小值滤波（erode）向外扩散深色；
+        # 若用 dilate（最大值滤波）扩散出去的是白色背景，等于没有加粗
+        k = max(2, int(min_line_px))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
         line_mask_thick = cv2.dilate(line_mask, kernel, iterations=1)
-        # 将加粗后的线条写回图像（保持原有颜色）
-        # 新增的像素用邻近线条颜色填充
         new_pixels = cv2.bitwise_and(line_mask_thick, cv2.bitwise_not(line_mask))
-        # 对原图做同样的dilate来获取颜色
-        img_dilated = cv2.dilate(img, kernel, iterations=1)
-        # 只在新增像素位置用dilated版本替换
+        img_eroded = cv2.erode(img, kernel, iterations=1)
         mask_3ch = cv2.merge([new_pixels, new_pixels, new_pixels])
-        img = np.where(mask_3ch > 0, img_dilated, img)
+        img = np.where(mask_3ch > 0, img_eroded, img)
 
     return img
 
@@ -321,12 +328,14 @@ def align_images(img_a, img_b, method='ecc'):
     return img_b, False
 
 
-def generate_diff_layers(img_a, img_b, focus_mask, blur_size=7, threshold=25):
+def generate_diff_layers(img_a, img_b, focus_mask, blur_size=7, threshold=25, tolerance_px=3):
     """
     生成差异图层
     img_a: 新图纸（A，衍生后的）
     img_b: 原始图纸（B）
     focus_mask: 主体区域掩码
+    tolerance_px: 距离变换容差（像素）——线条像素到对方图纸最近线条的距离
+                  超过该值才计为真实差异，用于过滤配准残差/渲染抖动误报；0 表示关闭（严格像素diff）
     返回: (diff_added_rgba, diff_removed_rgba)
       - diff_added: A有B无的像素（红色RGBA）
       - diff_removed: B有A无的像素（蓝色RGBA）
@@ -349,10 +358,19 @@ def generate_diff_layers(img_a, img_b, focus_mask, blur_size=7, threshold=25):
     _, bin_a = cv2.threshold(gray_a_blur, 180, 255, cv2.THRESH_BINARY_INV)
     _, bin_b = cv2.threshold(gray_b_blur, 180, 255, cv2.THRESH_BINARY_INV)
 
-    # A有B无 = 新增（红色）
-    added = cv2.bitwise_and(bin_a, cv2.bitwise_not(bin_b))
-    # B有A无 = 删除（蓝色）
-    removed = cv2.bitwise_and(bin_b, cv2.bitwise_not(bin_a))
+    if tolerance_px and tolerance_px > 0:
+        # 距离变换容差 diff：分别计算"到对方图纸最近线条"的距离场，
+        # 线条像素距离超过容差才计为差异——亚像素配准残差、抗锯齿/压缩抖动
+        # 产生的 1~2px 偏移不再形成成对红蓝误报
+        dist_to_b = cv2.distanceTransform(cv2.bitwise_not(bin_b), cv2.DIST_L2, 3)
+        dist_to_a = cv2.distanceTransform(cv2.bitwise_not(bin_a), cv2.DIST_L2, 3)
+        added = ((bin_a > 0) & (dist_to_b > tolerance_px)).astype(np.uint8) * 255
+        removed = ((bin_b > 0) & (dist_to_a > tolerance_px)).astype(np.uint8) * 255
+    else:
+        # A有B无 = 新增（红色）
+        added = cv2.bitwise_and(bin_a, cv2.bitwise_not(bin_b))
+        # B有A无 = 删除（蓝色）
+        removed = cv2.bitwise_and(bin_b, cv2.bitwise_not(bin_a))
 
     # 形态学处理：去噪+连接
     # 先 open 去掉孤立噪点，再 close 连接相邻像素，最后 dilate 稍微加粗差异线条使其可见
@@ -405,7 +423,7 @@ def _write_meta(meta, output_dir):
     os.replace(tmp, output_dir / "meta.json")
 
 
-def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True, model=DEFAULT_MODEL, progress_callback=None, vlm_async=True, base_url=DEFAULT_BASE_URL):
+def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True, model=DEFAULT_MODEL, progress_callback=None, vlm_async=True, base_url=DEFAULT_BASE_URL, enhance_lines=True, annotate_changes=True):
     """
     执行图纸对比的核心流程
     
@@ -418,6 +436,8 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
         progress_callback: 进度回调函数 callback(percent: int, message: str)
         vlm_async: True 时 VLM 区域解读转后台线程增量写 meta.json，CV 结果一出立即返回
         base_url: OpenAI 兼容 API 的 Base URL
+        enhance_lines: 线条增强（PDF转图片时加粗/加深细线条）
+        annotate_changes: 差异标注（区域框选 + 变更清单 + VLM 解读）；关闭后仅输出红蓝差异图层
     
     返回:
         dict: 包含对比结果元数据（vlm_async 时 regions/summary 由后台线程后续补充）
@@ -433,9 +453,9 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
 
     # 1. 转换PDF为图像
     report(5, "正在转换PDF为图像...")
-    img_a = pdf_page_to_image(str(pdf_a_path), zoom=zoom)
+    img_a = pdf_page_to_image(str(pdf_a_path), zoom=zoom, thicken_lines=enhance_lines)
     report(20, "图纸A转换完成")
-    img_b = pdf_page_to_image(str(pdf_b_path), zoom=zoom)
+    img_b = pdf_page_to_image(str(pdf_b_path), zoom=zoom, thicken_lines=enhance_lines)
     report(35, "图纸B转换完成")
 
     # 统一尺寸（以A为基准）
@@ -510,9 +530,13 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
     cv2.imwrite(str(output_dir / "diff_added.webp"), diff_added, [cv2.IMWRITE_WEBP_QUALITY, 88])
     cv2.imwrite(str(output_dir / "diff_removed.webp"), diff_removed, [cv2.IMWRITE_WEBP_QUALITY, 88])
 
-    # 8. 差异区域聚类
-    report(80, "正在提取差异区域...")
-    regions = extract_diff_regions(diff_added[:, :, 3], diff_removed[:, :, 3], max_regions=20)
+    # 8. 差异区域聚类（标注关闭时整体跳过：不框选、不出清单、不调 VLM 解读）
+    if annotate_changes:
+        report(80, "正在提取差异区域...")
+        regions = extract_diff_regions(diff_added[:, :, 3], diff_removed[:, :, 3], max_regions=20)
+    else:
+        report(80, "差异标注已关闭，跳过区域提取与AI解读")
+        regions = []
 
     # 9. 统计差异
     added_pixels = np.count_nonzero(diff_added[:, :, 3])
@@ -531,7 +555,8 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
         "pdf_b": Path(pdf_b_path).name,
         "different_drawings": different_drawings,
         "regions": regions,
-        "moved_views": block_info["moved_views"],
+        # 标注关闭时同步隐藏"视图移动"标注框与清单条目（配准结果本身不受影响）
+        "moved_views": block_info["moved_views"] if annotate_changes else [],
         "view_stats": block_info["view_stats"],
         "low_confidence": block_info["low_confidence"],
         "summary": "",

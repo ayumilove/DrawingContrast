@@ -647,6 +647,9 @@
     animation: annotPulse 2s var(--ease-out-quart);
   }
 
+  /* 标注开关按钮的关闭态 */
+  .toolbar-btn.off { opacity: 0.4; }
+
   @keyframes annotPulse {
     0%   { box-shadow: 0 0 0 0 oklch(52% 0.22 25 / 0.55); }
     50%  { box-shadow: 0 0 0 14px oklch(52% 0.22 25 / 0.15); }
@@ -730,6 +733,7 @@
     <span class="zoom-display" id="zoomLevel">100%</span>
     <button class="toolbar-btn" onclick="zoomIn()" title="放大 (+)">+</button>
     <button class="toolbar-btn" onclick="zoomReset()" title="适应窗口 (0)">⊡</button>
+    <button class="toolbar-btn" id="annotToggle" onclick="toggleAnnot()" title="显示/隐藏差异标注与变更清单">▦</button>
   </div>
 </div>
 
@@ -1292,6 +1296,18 @@ function focusRegion(bbox, idx) {
 }
 
 loadAll();
+
+// 显示/隐藏差异标注与变更清单：只想看红/蓝差异图层时可随时关闭（无需重新对比）
+let annotVisible = true;
+function toggleAnnot() {
+  annotVisible = !annotVisible;
+  document.getElementById('annotOverlay').style.display = annotVisible ? '' : 'none';
+  // 清除内联 display 后回退到 CSS：仅在清单面板可用（available）时重新显示
+  document.getElementById('changePanel').style.display = annotVisible ? '' : 'none';
+  const btn = document.getElementById('annotToggle');
+  btn.classList.toggle('off', !annotVisible);
+  btn.title = annotVisible ? '隐藏差异标注与变更清单' : '显示差异标注与变更清单';
+}
 </script>
 </body>
 </html>

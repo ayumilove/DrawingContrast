@@ -62,6 +62,7 @@ PDF 矢量解析 → 高精度光栅化 → 自适应线条增强 → 图像配�
 ### 2. 语义差异分割
 
 - **双通道差异提取** — 独立生成"新增元素层"与"删除元素层"，支持精确追溯每一处变更
+- **距离变换容差** — 计算"到对方图纸最近线条"距离场，线条像素距离超过容差才计为真实差异，亚像素配准残差与渲染抖动不再形成成对红蓝误报
 - **噪声自适应阈值** — 基于图纸整体灰度分布动态调整检测灵敏度，避免 JPEG 压缩噪声的误报
 - **Alpha 通道 RGBA 输出** — 差异图层以半透明叠加方式呈现，不遮挡原始图纸细节
 
@@ -107,6 +108,8 @@ smoothstep(edge0, edge1, x) = t² × (3 - 2t)
 | 启动预加载 | QPainter 渲染的品牌 Splash Screen，毫秒级视觉响应 |
 | BYOK 零硬编码 | API Key 由用户自带，DPAPI 加密存于程序目录，不进仓库、不写日志 |
 | 优雅降级 | 未配置 Key 时自动切换纯 CV 模式，基础对比功能不受影响 |
+| 线条增强 | PDF 转图片时自动加粗/加深细线条，解决细线渲染过淡不易看的问题（设置可关） |
+| 标注手动开关 | 差异框选/变更清单可在设置中关闭，也可在结果页工具栏一键隐藏，只看红/蓝差异 |
 | 高精度渲染 | 4763×3368px 原始分辨率，2x 超采样无损缩放 |
 | 全平台交互 | 鼠标滚轮缩放、拖拽平移、键盘快捷键、触屏手势 |
 
@@ -180,17 +183,20 @@ $env:SILICONFLOW_API_KEY = "sk-xxxxxxxx"
 
 ```json
 {
-  "service_name": "DrawingContrast",
-  "app_version": "0.4.0",
+  "service_name": "drawing-contrast",
+  "system": "xAuto",
+  "app_version": "0.5.0",
   "level": "info | warning | error",
   "message": "事件描述（通用文案，不含图纸内容）",
   "class_name": "模块名",
   "method_name": "方法名",
-  "timestamp": "ISO 8601 时间戳",
+  "timestamp": 1754803200,
   "elapsed_ms": 12345,
   "extra": {}
 }
 ```
+
+> 说明：`timestamp` 为 epoch 秒级整数（`int(time.time())`），与 Loki/Grafana 现有标签体系保持一致；`system` 仅在配置了该值时上报。
 
 隐私说明：
 
