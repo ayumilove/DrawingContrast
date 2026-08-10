@@ -80,6 +80,10 @@ logbot = None  # 全局 LogBot SDK 实例（仅当配置了 log_url 时启用）
 class StaticHandler(http.server.SimpleHTTPRequestHandler):
     """静态文件 Handler，指向 web 目录"""
 
+    # 空闲连接超时：Chromium 预连接可能持有沉默连接，
+    # 无超时时单线程服务会永久阻塞在 readline，导致关机时 shutdown() 卡死
+    timeout = 15
+
     def __init__(self, *args, web_dir=None, **kwargs):
         self._web_dir = web_dir
         super().__init__(*args, directory=web_dir, **kwargs)
@@ -113,12 +117,15 @@ class WebServerThread(threading.Thread):
         handler = lambda *args, **kwargs: StaticHandler(
             *args, web_dir=str(self.web_dir), **kwargs
         )
-        self.server = http.server.HTTPServer(('127.0.0.1', self.port), handler)
+        # ThreadingHTTPServer：每个连接独立 daemon 线程，
+        # 避免单线程服务被沉默连接阻塞导致 shutdown() 卡死、进程无法退出
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', self.port), handler)
         self.server.serve_forever()
 
     def stop(self):
         if self.server:
             self.server.shutdown()
+            self.server.server_close()
 
 
 # ---------- 后台对比工作线程 ----------

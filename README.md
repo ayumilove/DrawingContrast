@@ -185,7 +185,7 @@ $env:SILICONFLOW_API_KEY = "sk-xxxxxxxx"
 {
   "service_name": "drawing-contrast",
   "system": "xAuto",
-  "app_version": "0.5.0",
+  "app_version": "0.5.1",
   "level": "info | warning | error",
   "message": "事件描述（通用文案，不含图纸内容）",
   "class_name": "模块名",
