@@ -217,11 +217,19 @@ class SettingsDialog(QDialog):
         form_view.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.chk_enhance = QCheckBox("PDF 转图片时加粗/加深细线条（推荐开启）")
         self.chk_enhance.setChecked(bool(cfg.get("enhance_lines", True)))
-        self.chk_annotate = QCheckBox("框选差异区域并生成变更清单与文字描述（关闭后仅显示红/蓝差异）")
+        self.chk_annotate = QCheckBox("框选差异区域并生成变更清单与文字描述（需配置 AI，关闭后仅显示红/蓝差异）")
         self.chk_annotate.setChecked(bool(cfg.get("annotate_changes", True)))
+        self.lbl_annotate_hint = QLabel("未配置 API Key：差异标注不可用，对比结果仅显示红/蓝差异图层")
+        self.lbl_annotate_hint.setStyleSheet("color:#94a3b8; font-size:11px;")
+        self.lbl_annotate_hint.setWordWrap(True)
         form_view.addRow("线条增强", self.chk_enhance)
         form_view.addRow("差异标注", self.chk_annotate)
+        form_view.addRow("", self.lbl_annotate_hint)
         layout.addWidget(grp_view)
+
+        # 差异标注依赖 AI：Key 为空时置灰，保存后由 _apply_ai_config 再次兜底
+        self.edit_api_key.textChanged.connect(self._sync_annotate_state)
+        self._sync_annotate_state()
 
         # ── FTP 设置 ──
         grp_ftp = QGroupBox("FTP 设置（可选，配置后启用零部件编号下载对比）")
@@ -301,6 +309,16 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(btn_cancel)
         btn_row.addWidget(btn_ok)
         layout.addLayout(btn_row)
+
+    def _sync_annotate_state(self):
+        """差异标注（框选 + 变更清单 + 文字描述）依赖 AI，未填 Key 时置灰并提示"""
+        has_key = bool(self.edit_api_key.text().strip())
+        self.chk_annotate.setEnabled(has_key)
+        self.lbl_annotate_hint.setVisible(not has_key)
+        self.chk_annotate.setToolTip(
+            "框选差异区域并生成变更清单与文字描述" if has_key
+            else "未配置 API Key：差异标注不可用，结果仅显示红/蓝差异"
+        )
 
     def get_config(self) -> dict:
         try:
@@ -619,10 +637,11 @@ class MainWindow(QMainWindow):
         self.API_KEY = cfg.get("api_key", "")
         self.AI_BASE_URL = cfg.get("base_url", ai_config.DEFAULT_BASE_URL)
         self.AI_MODEL = cfg.get("model", ai_config.DEFAULT_MODEL)
-        self.AI_ENABLED = bool(cfg.get("enable_ai", True)) and bool(self.API_KEY)
-        # 对比选项：线条增强与差异标注（默认开启，兼容旧配置）
+        self.AI_ENABLED = ai_config.ai_enabled(cfg)
+        # 对比选项：线条增强（默认开启，兼容旧配置）
         self.ENHANCE_LINES = bool(cfg.get("enhance_lines", True))
-        self.ANNOTATE_CHANGES = bool(cfg.get("annotate_changes", True))
+        # 差异标注（框选 + 变更清单 + 文字描述）依赖 AI：未配置 Key 时强制关闭
+        self.ANNOTATE_CHANGES = bool(cfg.get("annotate_changes", True)) and self.AI_ENABLED
         # 日志上报（可选）：仅当配置了上报地址时启用；格式与初版一致（service_name/system 供 Loki 标签使用）
         if ai_config.log_enabled(cfg):
             logbot = LogBotSdk(url=cfg["log_url"], service_name="drawing-contrast",
@@ -784,10 +803,12 @@ class MainWindow(QMainWindow):
                 return
             self._apply_ai_config(cfg)
             ai_state = "已启用" if self.AI_ENABLED else "不可用（未配置 API Key）"
+            annot_state = "已启用" if self.ANNOTATE_CHANGES else "已关闭"
             ftp_state = "已启用" if ai_config.ftp_enabled(cfg) else "未配置"
             log_state = "已启用" if ai_config.log_enabled(cfg) else "未配置"
             self.status_label.setText(
-                f"设置已保存 — AI：{ai_state}，FTP：{ftp_state}，日志：{log_state}"
+                f"设置已保存 — AI：{ai_state}，差异标注：{annot_state}，"
+                f"FTP：{ftp_state}，日志：{log_state}"
             )
             log.info(
                 f"设置已更新: model={self.AI_MODEL}, "

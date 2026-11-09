@@ -25,6 +25,22 @@ from drawing_contrast.core.vlm_analyzer import extract_diff_regions, analyze_reg
 from drawing_contrast.ai_config import DEFAULT_BASE_URL, DEFAULT_MODEL, chat_completions_url
 
 
+def _load_page_normalized(doc, page_num=0):
+    """加载页面并归一化旋转角：忽略 PDF 的 /Rotate 标记，始终按 MediaBox 原始方向渲染。
+
+    部分图纸（多来自第三方重制/转换工具）会带上与内容实际方向不符的 /Rotate
+    （例如 /Rotate 270），而 PyMuPDF 的 get_pixmap 默认会应用该角度，导致同一
+    零件的两张图纸一张横放、一张竖放，缩放对齐后整体错位。
+    这里统一归零，保证 A/B 两张图纸使用同一套坐标系。
+    """
+    page = doc.load_page(page_num)
+    rotation = page.rotation
+    if rotation:
+        print(f"  已忽略页面旋转角 /Rotate {rotation}，按 MediaBox 原始方向渲染: {doc.name}")
+        page.set_rotation(0)
+    return page
+
+
 def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True, min_line_px=2):
     """将PDF页面转为OpenCV BGR图像
     thicken_lines: 线条增强——加深淡线条并保证最小线宽，
@@ -32,7 +48,7 @@ def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True, min_line
     min_line_px: 增强后的最小线宽（像素，当前 zoom 下）
     """
     doc = fitz.open(pdf_path)
-    page = doc.load_page(page_num)
+    page = _load_page_normalized(doc, page_num)
     mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat)
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
@@ -70,9 +86,9 @@ def pdf_page_to_image(pdf_path, page_num=0, zoom=2, thicken_lines=True, min_line
 
 
 def pdf_page_to_base64(pdf_path, page_num=0, zoom=2):
-    """将PDF页面转为base64 PNG"""
+    """将PDF页面转为base64 PNG（同样按 MediaBox 原始方向，保证与比对图坐标系一致）"""
     doc = fitz.open(pdf_path)
-    page = doc.load_page(page_num)
+    page = _load_page_normalized(doc, page_num)
     mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat)
     img_bytes = pix.tobytes("png")
@@ -438,6 +454,7 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
         base_url: OpenAI 兼容 API 的 Base URL
         enhance_lines: 线条增强（PDF转图片时加粗/加深细线条）
         annotate_changes: 差异标注（区域框选 + 变更清单 + VLM 解读）；关闭后仅输出红蓝差异图层
+            未配置 api_key / 关闭 use_ai 时自动强制关闭（标注依赖 AI）
     
     返回:
         dict: 包含对比结果元数据（vlm_async 时 regions/summary 由后台线程后续补充）
@@ -445,6 +462,10 @@ def run_comparison(pdf_a_path, pdf_b_path, output_dir, api_key=None, use_ai=True
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     zoom = 4
+
+    # 差异标注（区域框选 + 变更清单 + 文字描述）依赖 AI：未配置 Key 时强制关闭，
+    # 避免产出无解读内容的框选与清单（仅保留红/蓝差异图层）
+    annotate_changes = bool(annotate_changes and use_ai and api_key)
 
     def report(pct, msg):
         if progress_callback:

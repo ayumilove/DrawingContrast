@@ -3,6 +3,8 @@
   "base_url": "https://api.siliconflow.cn/v1",
   "model": "Qwen/Qwen3-VL-32B-Instruct",
   "enable_ai": true,
+  "enhance_lines": true,
+  "annotate_changes": true,
   "ftp_host": "",
   "ftp_port": 21,
   "ftp_user": "",

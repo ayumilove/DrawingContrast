@@ -71,6 +71,15 @@ def log_enabled(cfg: dict) -> bool:
     return bool(cfg.get("log_url"))
 
 
+def ai_enabled(cfg: dict) -> bool:
+    """AI 功能启用判定：开关打开且已配置 API Key
+
+    未配置 Key（含用户清空 Key/URL 后保存）时降级为纯 CV 对比，
+    依赖 AI 的差异框选、变更清单与文字描述一并关闭。
+    """
+    return bool(cfg.get("enable_ai", True)) and bool((cfg.get("api_key") or "").strip())
+
+
 # ---------- DPAPI 加解密（Windows） ----------
 
 def _dpapi_call(func, data: bytes) -> bytes:

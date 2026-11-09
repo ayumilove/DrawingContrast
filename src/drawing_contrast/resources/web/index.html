@@ -1119,7 +1119,11 @@ const BADGE_CLASS = {
 function initChangePanel(meta) {
   const regions = meta.regions || [];
   const movedViews = meta.moved_views || [];
-  if (!regions.length && !movedViews.length) return;  // 向后兼容：无数据不渲染
+  // 无标注数据（未配置 AI / 已关闭差异标注）时隐藏工具栏标注开关
+  const hasAnnot = regions.length > 0 || movedViews.length > 0;
+  const annotBtn = document.getElementById('annotToggle');
+  if (annotBtn) annotBtn.style.display = hasAnnot ? '' : 'none';
+  if (!hasAnnot) return;  // 向后兼容：无数据不渲染
 
   const panel = document.getElementById('changePanel');
   const list = document.getElementById('changeList');
