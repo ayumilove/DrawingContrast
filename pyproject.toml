@@ -1,6 +1,6 @@
 [project]
 name = "drawingcontrast"
-version = "0.5.1"
+version = "0.5.2"
 description = "工程图纸差异对比工具：一键比对两版 PDF 图纸并以交互式网页呈现差异"
 readme = "README.md"
 requires-python = ">=3.11"
